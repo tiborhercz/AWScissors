@@ -3,6 +3,7 @@ provider "aws" {
 }
 
 locals {
+  name       = "AWScissors"
   account_id = data.aws_caller_identity.current.account_id
   region     = data.aws_region.current.name
 }
@@ -13,13 +14,15 @@ resource "aws_cloudwatch_event_target" "iam_user" {
 }
 
 resource "aws_cloudwatch_event_rule" "iam_user" {
-  name        = "aws_scissors_iam_user"
-  description = "Capture each IAMUser event"
+  name           = "${local.name}-iam-user"
+  description    = "Capture each IAMUser event"
+  event_bus_name = "default"
 
   event_pattern = jsonencode({
     "detail" : {
-      "userIdentity": {
-        "type": ["IAMUser"]
+      "readOnly" : [false],
+      "userIdentity" : {
+        "type" : ["IAMUser"]
       }
     }
   })
@@ -31,22 +34,20 @@ resource "aws_cloudwatch_event_target" "assumed_role" {
 }
 
 resource "aws_cloudwatch_event_rule" "assumed_role" {
-  name        = "aws_scissors_assumed_role"
-  description = "Capture each AssumeRole event"
+  name           = "${local.name}-assumed-role"
+  description    = "Capture each AssumeRole event"
+  event_bus_name = "default"
 
   event_pattern = jsonencode({
-#    "source" : [
-#      "aws.sts"
-#    ],
-#    "detail-type" = [
-#      "AWS Console Sign In via CloudTrail"
-#    ],
     "detail" : {
-#      "eventSource" : ["sts.amazonaws.com"],
-#      "eventName" : ["AssumeRole"]
-      "userIdentity": {
-        "type": ["AssumedRole"],
-        "arn" : ["arn:aws:sts::*:assumed-role/AWSReservedSSO_*"]
+      "readOnly" : [false],
+      "userIdentity" : {
+        "type" : ["AssumedRole"],
+        "arn" : [
+          {
+            "wildcard" : "arn:aws:sts::*:assumed-role/AWSReservedSSO_*"
+          }
+        ]
       }
     }
   })
@@ -54,10 +55,15 @@ resource "aws_cloudwatch_event_rule" "assumed_role" {
 
 resource "aws_lambda_function" "aws_scissors" {
   filename      = "lambda_function.zip"
-  function_name = "AWScissors"
+  function_name = local.name
   role          = aws_iam_role.aws_scissors.arn
   handler       = "AWScissors"
   runtime       = "go1.x"
+  environment {
+    variables = {
+      SNS_TOPIC_ARN = aws_sns_topic.aws_scissors_notifications.arn
+    }
+  }
 }
 
 resource "aws_lambda_permission" "aws_scissors" {
@@ -65,11 +71,11 @@ resource "aws_lambda_permission" "aws_scissors" {
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.aws_scissors.function_name
   principal     = "events.amazonaws.com"
-  source_arn    = "arn:aws:events:${local.region}:${local.account_id}:rule/aws_scissors_*"
+  source_arn    = "arn:aws:events:${local.region}:${local.account_id}:rule/${local.name}-*"
 }
 
 resource "aws_iam_role" "aws_scissors" {
-  name = "AWScissors"
+  name = local.name
 
   assume_role_policy = jsonencode({
     Version   = "2012-10-17"
@@ -77,7 +83,6 @@ resource "aws_iam_role" "aws_scissors" {
       {
         Action    = "sts:AssumeRole"
         Effect    = "Allow"
-        Sid       = ""
         Principal = {
           Service = "lambda.amazonaws.com"
         }
@@ -86,8 +91,8 @@ resource "aws_iam_role" "aws_scissors" {
   })
 }
 
-resource "aws_iam_policy" "aws_scissors_logging" {
-  name   = "aws_scissors_logging"
+resource "aws_iam_policy" "aws_scissors_policy" {
+  name   = "${local.name}-lambda-policy"
   policy = jsonencode({
     "Version" : "2012-10-17",
     "Statement" : [
@@ -102,7 +107,13 @@ resource "aws_iam_policy" "aws_scissors_logging" {
           "logs:PutLogEvents"
         ],
         Effect : "Allow",
-        Resource : "arn:aws:logs:${local.region}:${local.account_id}:log-group:/aws/lambda/AWScissors:*"
+        Resource : "arn:aws:logs:${local.region}:${local.account_id}:log-group:/aws/lambda/${local.name}:*"
+      },
+      {
+        "Sid" : "PublishSNSMessage",
+        "Effect" : "Allow",
+        "Action" : "sns:Publish",
+        "Resource" : aws_sns_topic.aws_scissors_notifications.arn
       }
     ]
   })
@@ -110,10 +121,50 @@ resource "aws_iam_policy" "aws_scissors_logging" {
 
 resource "aws_iam_role_policy_attachment" "aws_scissors_logging" {
   role       = aws_iam_role.aws_scissors.id
-  policy_arn = aws_iam_policy.aws_scissors_logging.arn
+  policy_arn = aws_iam_policy.aws_scissors_policy.arn
 }
 
 resource "aws_cloudwatch_log_group" "aws_scissors" {
-  name              = "/aws/lambda/AWScissors"
+  name              = "/aws/lambda/${local.name}"
   retention_in_days = 14
+}
+
+resource "aws_sns_topic" "aws_scissors_notifications" {
+  name = "${local.name}-notifications"
+}
+
+resource "aws_sns_topic_policy" "aws_scissors_notifications" {
+  arn = aws_sns_topic.aws_scissors_notifications.arn
+
+  policy = data.aws_iam_policy_document.aws_scissors_notifications.json
+}
+
+data "aws_iam_policy_document" "aws_scissors_notifications" {
+  policy_id = "${local.name}-notifications"
+
+  statement {
+    principals {
+      type        = "Service"
+      identifiers = ["lambda.amazonaws.com"]
+    }
+
+    effect = "Allow"
+
+    actions = [
+      "SNS:Publish"
+    ]
+
+    resources = [
+      aws_sns_topic.aws_scissors_notifications.arn,
+    ]
+
+    condition {
+      test     = "ArnLike"
+      variable = "aws:SourceArn"
+
+      values = [
+        "arn:aws:lambda:${local.region}:${local.account_id}:function:${local.name}"
+      ]
+    }
+  }
 }
