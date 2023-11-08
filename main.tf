@@ -8,14 +8,34 @@ locals {
   region     = data.aws_region.current.name
 }
 
+resource "aws_cloudwatch_event_target" "root" {
+  arn  = aws_lambda_function.event_parser.arn
+  rule = aws_cloudwatch_event_rule.root.id
+}
+
+resource "aws_cloudwatch_event_rule" "root" {
+  name           = "${local.name}-root"
+  description    = "Capture each write/update event for the root user"
+  event_bus_name = "default"
+
+  event_pattern = jsonencode({
+    "detail" : {
+      "readOnly" : [false],
+      "userIdentity" : {
+        "type" : ["Root"]
+      }
+    }
+  })
+}
+
 resource "aws_cloudwatch_event_target" "iam_user" {
-  arn  = aws_lambda_function.aws_scissors.arn
+  arn  = aws_lambda_function.event_parser.arn
   rule = aws_cloudwatch_event_rule.iam_user.id
 }
 
 resource "aws_cloudwatch_event_rule" "iam_user" {
   name           = "${local.name}-iam-user"
-  description    = "Capture each IAMUser event"
+  description    = "Capture each write/update event for IAM users"
   event_bus_name = "default"
 
   event_pattern = jsonencode({
@@ -29,13 +49,13 @@ resource "aws_cloudwatch_event_rule" "iam_user" {
 }
 
 resource "aws_cloudwatch_event_target" "assumed_role" {
-  arn  = aws_lambda_function.aws_scissors.arn
+  arn  = aws_lambda_function.event_parser.arn
   rule = aws_cloudwatch_event_rule.assumed_role.id
 }
 
 resource "aws_cloudwatch_event_rule" "assumed_role" {
   name           = "${local.name}-assumed-role"
-  description    = "Capture each AssumeRole event"
+  description    = "Capture each write/update event for SSO users"
   event_bus_name = "default"
 
   event_pattern = jsonencode({
@@ -53,80 +73,19 @@ resource "aws_cloudwatch_event_rule" "assumed_role" {
   })
 }
 
-resource "aws_lambda_function" "aws_scissors" {
-  filename      = "lambda_function.zip"
-  function_name = local.name
-  role          = aws_iam_role.aws_scissors.arn
-  handler       = "AWScissors"
-  runtime       = "go1.x"
-  environment {
-    variables = {
-      SNS_TOPIC_ARN = aws_sns_topic.aws_scissors_notifications.arn
-    }
+resource "aws_ssm_parameter" "teams_webhook_url" {
+  name        = "/custom/AWScissors/MicrosoftTeamsWebhookUrl"
+  description = "The Webhook url for the teams channel. Replace the value with the Teams Webhook Url from your channel."
+  type        = "SecureString"
+  value       = "TEMPURL"
+
+  lifecycle {
+    ignore_changes = [value]
   }
 }
 
-resource "aws_lambda_permission" "aws_scissors" {
-  statement_id  = "AllowExecutionFromCloudWatch"
-  action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.aws_scissors.function_name
-  principal     = "events.amazonaws.com"
-  source_arn    = "arn:aws:events:${local.region}:${local.account_id}:rule/${local.name}-*"
-}
-
-resource "aws_iam_role" "aws_scissors" {
-  name = local.name
-
-  assume_role_policy = jsonencode({
-    Version   = "2012-10-17"
-    Statement = [
-      {
-        Action    = "sts:AssumeRole"
-        Effect    = "Allow"
-        Principal = {
-          Service = "lambda.amazonaws.com"
-        }
-      }
-    ]
-  })
-}
-
-resource "aws_iam_policy" "aws_scissors_policy" {
-  name   = "${local.name}-lambda-policy"
-  policy = jsonencode({
-    "Version" : "2012-10-17",
-    "Statement" : [
-      {
-        "Effect" : "Allow",
-        "Action" : "logs:CreateLogGroup",
-        "Resource" : "arn:aws:logs:${local.region}:${local.account_id}:*"
-      },
-      {
-        Action : [
-          "logs:CreateLogStream",
-          "logs:PutLogEvents"
-        ],
-        Effect : "Allow",
-        Resource : "arn:aws:logs:${local.region}:${local.account_id}:log-group:/aws/lambda/${local.name}:*"
-      },
-      {
-        "Sid" : "PublishSNSMessage",
-        "Effect" : "Allow",
-        "Action" : "sns:Publish",
-        "Resource" : aws_sns_topic.aws_scissors_notifications.arn
-      }
-    ]
-  })
-}
-
-resource "aws_iam_role_policy_attachment" "aws_scissors_logging" {
-  role       = aws_iam_role.aws_scissors.id
-  policy_arn = aws_iam_policy.aws_scissors_policy.arn
-}
-
-resource "aws_cloudwatch_log_group" "aws_scissors" {
-  name              = "/aws/lambda/${local.name}"
-  retention_in_days = 14
+data "aws_ssm_parameter" "teams_webhook_url" {
+  name = aws_ssm_parameter.teams_webhook_url.name
 }
 
 resource "aws_sns_topic" "aws_scissors_notifications" {
@@ -163,8 +122,14 @@ data "aws_iam_policy_document" "aws_scissors_notifications" {
       variable = "aws:SourceArn"
 
       values = [
-        "arn:aws:lambda:${local.region}:${local.account_id}:function:${local.name}"
+        "arn:aws:lambda:${local.region}:${local.account_id}:function:${aws_lambda_function.event_parser.function_name}"
       ]
     }
   }
+}
+
+resource "aws_sns_topic_subscription" "ms_teams_webhook" {
+  topic_arn = aws_sns_topic.aws_scissors_notifications.arn
+  protocol  = "lambda"
+  endpoint  = aws_lambda_function.ms_teams_webhook.arn
 }

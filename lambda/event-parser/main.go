@@ -13,7 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/sns"
 )
 
-var SNS_TOPIC_ARN = os.Getenv("SNS_TOPIC_ARN")
+var SnsTopicArn = os.Getenv("SNS_TOPIC_ARN")
 
 type CloudWatchEventDetails struct {
 	EventVersion     string    `json:"eventVersion"`
@@ -43,46 +43,65 @@ type CloudWatchEventDetails struct {
 	SessionCredentialFromConsole string `json:"sessionCredentialFromConsole"`
 }
 
+type SnsMessage struct {
+	DateTime string `json:"datetime"`
+	Message  string `json:"message"`
+	Subject  string `json:"subject"`
+}
+
 func HandleRequest(ctx context.Context, event events.CloudWatchEvent) {
 	var eventDetails CloudWatchEventDetails
-	fmt.Println(event)
-
-	detail := fmt.Sprintf("Detail = %s\n", event.Detail)
-	fmt.Println(detail)
-
-	_ = json.Unmarshal(event.Detail, &eventDetails)
-
-	sessionFromConsoleText := "not from the Management Console"
-	if eventDetails.SessionCredentialFromConsole == "true" {
-		sessionFromConsoleText = "from the Management Console"
-	}
-
-	outputMessage := fmt.Sprintf("AWScissors ✂️ %s on %s in %s by %s %s",
-		eventDetails.EventName,
-		eventDetails.EventSource,
-		eventDetails.UserIdentity.AccountID,
-		eventDetails.UserIdentity.Arn,
-		sessionFromConsoleText,
-	)
+	fmt.Println(string(event.Detail))
 
 	sess := session.Must(session.NewSessionWithOptions(session.Options{
 		SharedConfigState: session.SharedConfigEnable,
 	}))
 
-	svc := sns.New(sess)
+	_ = json.Unmarshal(event.Detail, &eventDetails)
 
-	result, err := svc.Publish(&sns.PublishInput{
-		Message:  &outputMessage,
-		TopicArn: &SNS_TOPIC_ARN,
+	outputMessage := fmt.Sprintf("✂️ **%s** on **%s** in **%s** **%s** by **%s** %s",
+		eventDetails.EventName,
+		eventDetails.EventSource,
+		eventDetails.AwsRegion,
+		eventDetails.UserIdentity.AccountID,
+		eventDetails.UserIdentity.Arn,
+		fromConsoleText(eventDetails.SessionCredentialFromConsole),
+	)
+
+	snsMessage, err := json.Marshal(SnsMessage{
+		Subject:  "AWScissors",
+		Message:  outputMessage,
+		DateTime: time.Now().Format(time.RFC3339),
 	})
 	if err != nil {
 		fmt.Println(err.Error())
-		os.Exit(1)
+		return
 	}
 
-	fmt.Println(*result.MessageId)
+	svc := sns.New(sess)
+
+	message := string(snsMessage)
+
+	result, err := svc.Publish(&sns.PublishInput{
+		Message:  &message,
+		TopicArn: &SnsTopicArn,
+	})
+	if err != nil {
+		fmt.Println(err.Error())
+		return
+	}
 
 	fmt.Println(outputMessage)
+	fmt.Printf("Message sent to SNS with messageId: %s \n", *result.MessageId)
+}
+
+func fromConsoleText(sessionCredentialFromConsole string) string {
+	sessionFromConsoleText := "not from the Management Console"
+	if sessionCredentialFromConsole == "true" {
+		sessionFromConsoleText = "from the Management Console"
+	}
+
+	return sessionFromConsoleText
 }
 
 func main() {

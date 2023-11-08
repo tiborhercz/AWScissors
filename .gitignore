@@ -1,6 +1,9 @@
 *.zip
 
-AWScissors
+event-parser
+!event-parser/
+teamswebhook
+!teamswebhook/
 
 # Compiled files
 *.tfstate
