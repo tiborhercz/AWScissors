@@ -8,6 +8,28 @@ locals {
   region     = data.aws_region.current.name
 }
 
+resource "aws_cloudwatch_event_bus" "awscissors" {
+  name = "AWScissors"
+}
+
+#module "event-rule" {
+#  for_each = toset(var.regions)
+#
+#  source = "./modules/event-rule"
+#
+#  name = local.name
+#  eventbus_region    = each.value
+#  eventbus_arn       = aws_cloudwatch_event_bus.awscissors.arn
+#  event_pattern_json = jsonencode({
+#    "detail" : {
+#      "readOnly" : [false],
+#      "userIdentity" : {
+#        "type" : ["IAMUser"]
+#      }
+#    }
+#  })
+#}
+
 resource "aws_cloudwatch_event_target" "root" {
   arn  = aws_lambda_function.event_parser.arn
   rule = aws_cloudwatch_event_rule.root.id

@@ -14,7 +14,8 @@ resource "aws_lambda_function" "event_parser" {
 
   environment {
     variables = {
-      SNS_TOPIC_ARN        = aws_sns_topic.aws_scissors_notifications.arn
+      SNS_TOPIC_ARN = aws_sns_topic.aws_scissors_notifications.arn
+      IN_AWS_ORGANIZATION = var.in_aws_organization
     }
   }
 }
@@ -66,6 +67,11 @@ resource "aws_iam_policy" "event_parser_policy" {
         Effect : "Allow",
         Action : "sns:Publish",
         Resource : aws_sns_topic.aws_scissors_notifications.arn
+      },
+      {
+        Effect : "Allow",
+        Action : "organizations:ListAccounts",
+        Resource : "*"
       }
     ]
   })

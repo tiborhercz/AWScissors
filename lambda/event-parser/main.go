@@ -5,15 +5,18 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/organizations"
 	"github.com/aws/aws-sdk-go/service/sns"
 )
 
 var SnsTopicArn = os.Getenv("SNS_TOPIC_ARN")
+var InAwsOrganization = os.Getenv("IN_AWS_ORGANIZATION")
 
 type CloudWatchEventDetails struct {
 	EventVersion     string    `json:"eventVersion"`
@@ -49,20 +52,30 @@ type SnsMessage struct {
 	Subject  string `json:"subject"`
 }
 
+var accountAliases = make(map[string]string)
+
+var AwsSession = session.Must(session.NewSessionWithOptions(session.Options{
+	SharedConfigState: session.SharedConfigEnable,
+}))
+
+func init() {
+	if len(accountAliases) == 0 {
+		initAccountAliases()
+		fmt.Println(accountAliases)
+	}
+}
+
 func HandleRequest(ctx context.Context, event events.CloudWatchEvent) {
 	var eventDetails CloudWatchEventDetails
 	fmt.Println(string(event.Detail))
 
-	sess := session.Must(session.NewSessionWithOptions(session.Options{
-		SharedConfigState: session.SharedConfigEnable,
-	}))
-
 	_ = json.Unmarshal(event.Detail, &eventDetails)
 
-	outputMessage := fmt.Sprintf("✂️ **%s** on **%s** in **%s** **%s** by **%s** %s",
+	outputMessage := fmt.Sprintf("✂️ **%s** on **%s** in **%s** of account %s (%s) by **%s** %s",
 		eventDetails.EventName,
 		eventDetails.EventSource,
 		eventDetails.AwsRegion,
+		fmt.Sprintf("**%s**", getAccountAlias(eventDetails.UserIdentity.AccountID)),
 		eventDetails.UserIdentity.AccountID,
 		eventDetails.UserIdentity.Arn,
 		fromConsoleText(eventDetails.SessionCredentialFromConsole),
@@ -78,7 +91,7 @@ func HandleRequest(ctx context.Context, event events.CloudWatchEvent) {
 		return
 	}
 
-	svc := sns.New(sess)
+	svc := sns.New(AwsSession)
 
 	message := string(snsMessage)
 
@@ -102,6 +115,52 @@ func fromConsoleText(sessionCredentialFromConsole string) string {
 	}
 
 	return sessionFromConsoleText
+}
+
+func initAccountAliases() {
+	inAwsOrganization, err := strconv.ParseBool(InAwsOrganization)
+	if err != nil {
+		fmt.Println(err.Error())
+		return
+	}
+
+	if !inAwsOrganization {
+		return
+	}
+
+	svc := organizations.New(AwsSession)
+
+	response, err := svc.ListAccounts(&organizations.ListAccountsInput{})
+	if err != nil {
+		fmt.Println(err.Error())
+		return
+	}
+
+	accounts := response.Accounts
+	for {
+		if response.NextToken == nil {
+			break
+		}
+
+		response, _ := svc.ListAccounts(&organizations.ListAccountsInput{NextToken: response.NextToken})
+		accounts = append(accounts, response.Accounts...)
+	}
+
+	for _, account := range accounts {
+		accountAliases[*account.Id] = *account.Name
+	}
+
+	return
+}
+
+func getAccountAlias(accountId string) string {
+	alias, ok := accountAliases[accountId]
+	if !ok {
+		_ = fmt.Errorf("no account alias found for account ID %s", accountId)
+		return ""
+	}
+
+	return alias
 }
 
 func main() {
