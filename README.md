@@ -1,4 +1,4 @@
-# AWScissors
+# AWScissors ✂️
 
 AWScissors is created to notify users when manual changes are being made by a users without using the Infrastructure as Code and cut off their fingers for doing so :)
 
