@@ -1,15 +1,15 @@
 module "go_lambda_packer_event_parser" {
   source      = "./modules/go-lambda-packer"
-  source_path = "${path.module}/lambda/event-parser"
-  output_path = "${path.module}/event-parser.zip"
+  source_path = "../lambda/event-parser"
+  output_path = "../event-parser.zip"
 }
 
 resource "aws_lambda_function" "event_parser" {
-  filename         = module.go_lambda_packer_event_parser.archive_output_path
   function_name    = "${local.name}-event-parser"
   role             = aws_iam_role.event_parser.arn
-  handler          = "event-parser"
-  runtime          = "go1.x"
+  handler          = "bootstrap"
+  runtime          = "provided.al2023"
+  filename         = module.go_lambda_packer_event_parser.archive_output_path
   source_code_hash = module.go_lambda_packer_event_parser.source_code_hash
 
   environment {

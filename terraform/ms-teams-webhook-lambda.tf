@@ -1,16 +1,16 @@
 module "go_lambda_packer_teamswebhook" {
   source      = "./modules/go-lambda-packer"
-  source_path = "${path.module}/lambda/teamswebhook"
-  output_path = "${path.module}/teamswebhook.zip"
+  source_path = "../lambda/teamswebhook"
+  output_path = "../teamswebhook.zip"
 }
 
 resource "aws_lambda_function" "ms_teams_webhook" {
-  filename         = module.go_lambda_packer_teamswebhook.archive_output_path
   function_name    = "${local.name}-ms-teams-webhook"
   role             = aws_iam_role.ms_teams_webhook.arn
-  handler          = "teamswebhook"
-  runtime          = "go1.x"
+  handler          = "bootstrap"
+  runtime          = "provided.al2023"
   timeout          = 8
+  filename         = module.go_lambda_packer_teamswebhook.archive_output_path
   source_code_hash = module.go_lambda_packer_teamswebhook.source_code_hash
 
   environment {
