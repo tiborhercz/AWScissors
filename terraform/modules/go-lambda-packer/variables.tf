@@ -8,6 +8,12 @@ variable "output_path" {
   type        = string
 }
 
+variable "architecture" {
+  description = "CPU architecture to compile for."
+  type        = string
+  default = "amd64"
+}
+
 variable "install_dependencies" {
   description = "Install module dependencies."
   type        = bool
