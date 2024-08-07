@@ -1,0 +1,165 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+
+Parameters:
+  EventRuleWildcardArn:
+    Type: String
+    Description: The ARN of the AWS Events Rule to capture events for.
+    Default: arn:aws:sts::*:assumed-role/AWSReservedSSO_*
+  AccountNameList:
+    Type: String
+    Description: The name of the AWS account this stack is deployed in.
+  SlackwebhookUrl:
+    Type: String
+    Description: The Webhook URL for the Slack channel.
+
+Resources:
+  RootEventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: AWScissors-root
+      Description: Capture each write/update event for the root user
+      EventBusName: default
+      State: ENABLED
+      EventPattern:
+        detail:
+          readOnly:
+            - false
+          userIdentity:
+            type:
+              - Root
+      Targets:
+        - Arn: !GetAtt Function.Arn
+          Id: RootEventsRule
+
+  PermissionForRootEventsRuleToInvokeLambda:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref Function
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt RootEventRule.Arn
+
+  IAMUserEventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: AWScissors-iam-user
+      Description: Capture each write/update event for IAM users
+      EventBusName: default
+      State: ENABLED
+      EventPattern:
+        detail:
+          readOnly:
+            - false
+          userIdentity:
+            type:
+              - IAMUser
+      Targets:
+        - Arn: !GetAtt Function.Arn
+          Id: IamUserEventsRule
+
+  PermissionForIamUserEventsRuleToInvokeLambda:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref Function
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt IAMUserEventRule.Arn
+
+  AssumedRoleEventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: AWScissors-assumed-role
+      Description: Capture each write/update event for SSO users
+      EventBusName: default
+      State: ENABLED
+      EventPattern:
+        detail:
+          readOnly:
+            - false
+          userIdentity:
+            type:
+              - AssumedRole
+            arn:
+              - wildcard: !Ref EventRuleWildcardArn
+      Targets:
+        - Arn: !GetAtt Function.Arn
+          Id: AssumedRoleEventsRule
+
+  PermissionForAssumedRoleEventsRuleToInvokeLambda:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref Function
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt AssumedRoleEventRule.Arn
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: LambdaExecutionRole
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+
+  Function:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: AWScissors
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: python3.12
+      Code:
+        ZipFile: |
+          import json
+          from urllib.request import Request, urlopen
+          import os
+
+          slack_webhook_url = os.environ.get('SLACK_WEBHOOK_URL')
+          account_name_list = os.environ.get('ACCOUNT_NAME_LIST')
+
+
+          def slack_notify_new_order(msg: str):
+              message = {
+                  "text": msg
+              }
+              req = Request(slack_webhook_url, json.dumps(message).encode('utf-8'))
+              req.add_header('Content-Type', 'application/json')
+              response = urlopen(req)
+              response.read()
+
+
+          def generate_cloudtrail_url(region: str, event_id: str) -> str:
+              return (
+                  f"https://{region}.console.aws.amazon.com/cloudtrailv2/home?region={region}#/events/{event_id}"
+              )
+
+
+          def from_console_text(event_detail: dict) -> str:
+              session_from_console_text = "through API"
+              if event_detail.get('sessionCredentialFromConsole') == "true":
+                  session_from_console_text = "through Management Console"
+              return session_from_console_text
+
+
+          def lambda_handler(event, context):
+              print(event)
+              print(account_name_list)
+              event_details = event.get("detail", {})
+              output_message = f"✂️ `{event_details['userIdentity']['arn']}` performed a `{event_details['eventName']}` on `{event_details['eventSource']}` " \
+                               f"in `{event_details['awsRegion']}` of account `{event_details['userIdentity']['accountId']}` " \
+                               f"{from_console_text(event_details)}. \n" \
+                               f"See <{generate_cloudtrail_url(event_details['awsRegion'], event_details['eventID'])}|CloudTrail Event> details"
+              slack_notify_new_order(
+                  output_message
+              )
+      Environment:
+        Variables:
+          SLACK_WEBHOOK_URL: !Ref SlackwebhookUrl
+          ACCOUNT_NAME_LIST: !Ref AccountNameList

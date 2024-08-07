@@ -7,6 +7,32 @@ To get notified of any changes made by users you can deploy AWScissors into your
 
 AWScissors uses the AWS default eventBridge to trigger a Lambda when an users performs non readonly API calls.
 
+## CloudFormation parameters
+
+### EventRuleWildcardArn 
+
+The ARN of role that you want to get notified on when a NON readonly actions is performed. 
+
+Example: 
+```
+arn:aws:sts::*:assumed-role/AWSReservedSSO_*
+```
+
+### AccountNameList 
+
+List of accountIds and names separated by a comma. 
+
+Example: 
+```
+12345678911=account1,12345678912=account2,12345678913=account3
+```
+
+### SlackwebhookUrl 
+
+The Slack webhook URL to send the notifications to. 
+
+Example: `https://hooks.slack.com/services/AWERH4ABCDEFG/AWERH4ABCDEFG/AWERH4ABCDEFGAWERH4ABCDEFG`
+
 ## AWS EventBridge Eventpatterns
 
 In all the event patterns we only look for NON readOnly events, meaning anything that is changed in the AWS environment.
